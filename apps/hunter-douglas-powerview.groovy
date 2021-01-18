@@ -4,6 +4,7 @@
  *  Copyright 2017 Chris Lang
  *
  *  Ported to Hubitat by Brian Ujvary
+ *  Additional modifications by Eric Will (corinuss)
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -15,6 +16,8 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  *  Change Log:
+ *    01/18/2021 v1.3 - Added optional logic to trust Powerview Hub state and not poll physical shades, to reduce
+ *                      battery consumption if not needed.  (corinuss)
  *    10/08/2020 v1.2 - Added logic to update device labels if the device names changed in
  *                      the PowerView hub
  *    06/20/2020 v1.1 - Added retrieval of firmware information and display on main page
@@ -93,6 +96,7 @@ def mainPage() {
                     atomicState?.loadingDevices = false
 
                     input("disablePoll", "bool", title: "Disable periodic polling of devices", required: false, defaultValue: false)
+                    input("useHubDeviceState", "bool", title: "Trust the Powerview Hub state when periodic polling.  This extends shade battery life, but shade status may be incorrect if the shades are adjusted without going through the Powerview Hub (such as via a remote).", required: false, defaultValue: false)
                     input("logEnable", "bool", title: "Enable debug logging", required: false, defaultValue: true)
                 }
             }
@@ -364,6 +368,7 @@ def removeDevices() {
 def pollDevices(firstPoll = false) {
     def now = now()
     def updateBattery = false
+    def refresh = !useHubDeviceState
     def runDelay = 1
 
     if (!firstPoll && disablePoll) {
@@ -371,13 +376,18 @@ def pollDevices(firstPoll = false) {
         return
     }
 
-    // Update battery status no more than once an hour
-    if (!atomicState?.lastBatteryUpdate || (atomicState?.lastBatteryUpdate - now) > (60 * 60 * 1000)) {
-        updateBattery = true
-        atomicState?.lastBatteryUpdate = now
+    if (!useHubDeviceState) {
+        // Update battery status no more than once an hour
+        if (!atomicState?.lastBatteryUpdate || (atomicState?.lastBatteryUpdate - now) > (60 * 60 * 1000)) {
+            updateBattery = true
+            atomicState?.lastBatteryUpdate = now
+        }
     }
 
-    if (logEnable) log.debug "pollDevices: updateBattery = ${updateBattery}"
+    if (logEnable) {
+        log.debug "pollDevices: updateBattery = ${updateBattery}"
+        log.debug "pollDevices: refresh = ${refresh}"
+    }
 
     getShadeDevices().eachWithIndex { device, index ->
         if (device != null) {
@@ -385,7 +395,7 @@ def pollDevices(firstPoll = false) {
             
             if (logEnable) log.debug "Running pollShadeDelayed() with runDelay = ${runDelay} for shade ${shadeId} (index = ${index})"
             
-            runIn(runDelay, "pollShadeDelayed", [overwrite: false, data: [shadeId: shadeId, updateBattery: updateBattery]])
+            runIn(runDelay, "pollShadeDelayed", [overwrite: false, data: [shadeId: shadeId, updateBattery: updateBattery, refresh: refresh]])
             runDelay += 5
         } else {
             if (logEnable) log.debug "Got null shade device, index ${index}"
@@ -698,19 +708,28 @@ def getShades() {
     callPowerView("shades", shadesCallback)
 }
 
-def pollShade(shadeDevice, updateBatteryStatus = false) {
+def pollShade(shadeDevice, updateBatteryStatus = false, refresh = false) {
     if (logEnable) log.debug "pollShade: shadeDevice = ${shadeDevice}"
     def shadeId = dniToShadeId(shadeDevice.deviceNetworkId)
-    pollShadeId(shadeId)
+    pollShadeId(shadeId, updateBatteryStatus, refresh)
 }
 
-def pollShadeId(shadeId, updateBatteryStatus = false) {
+// Enabling either of these options will use more battery on the shades.  Otherwise, the
+// cached values on the Powerview Hub will be used.
+// * updateBatteryStatus
+//      Force each shade to report its battery status back to the Powerview Hub.
+//      Default Hub behavior is to update once each week.
+// * refresh
+//      Force each shade to report its current status back to the Powerview Hub.
+//      Required only if manipulating the blinds outside of the Powerview Hub (such as manual or
+//      via a remote)
+def pollShadeId(shadeId, updateBatteryStatus = false, refresh = false) {
     if (logEnable) log.debug "pollShadeId: shadeId = ${shadeId}"
 
     def query = [:]
     if (updateBatteryStatus)
         query = [updateBatteryLevel: "true"]
-    else
+    else if (refresh)
         query = [refresh: "true"]
 
     callPowerView("shades/${shadeId}", shadePollCallback, query)
