@@ -41,6 +41,13 @@ metadata {
 
     preferences {
         input("logEnable", "bool", title: "Enable logging", required: false, defaultValue: true)
+        input(
+            "openTopByDefault",
+            "bool",
+            title: "Open top by default?",
+            description: "If set, Open and Close commands will operate the top position by default.  Otherwise, they will operate the bottom posistion by default.",
+            required: false,
+            defaultValue: false)            
     }
 }
 
@@ -93,6 +100,7 @@ public handleEvent(shadeJson) {
 	
 	state.batteryStatus = shadeJson.batteryStatus;  // 0 = No Status Available, 1 = Low, 2 = Medium, 3 = High, 4 = Plugged In
 	state.shadeType = shadeJson.type;  // Need the shade types from Hunter Douglas so the right functions are used against the right shade type
+	state.shadeCapabilities = shadeJson.capabilities;
 }
 
 def updatePosition(position, posKind) {
@@ -120,13 +128,24 @@ def parse(String description) {}
 def open() {
     if (logEnable) log.debug "Executing 'open'"
     
-    //TODO get a mapping of the different shade types and add to switch statement
-    switch (state.shadeType) {
-        case 6:    // Duette, Applause
+    //TODO Figure out what these capability bits mean.  So far only have seen values 0, 6 and 7.
+    // 0     = Standard bottom-up?
+    // Bit 0 = Bottom-Up rail exists
+    // Bit 1 = Top-Down rail exist?
+    // Bit 2 = Not standard...?
+    switch (state.shadeCapabilities) {
+        case 0:     // Standard
             parent.setPosition(device, [position: 100])
             break
+        case 6:     // Top-Down
+            parent.setPosition(device, [position: 0])
+            break;
+        case 7:     // Top-Down/Bottom-Up
         default:
-            parent.setPosition(device, [bottomPosition: 100, topPosition: 0])
+            if (openTopByDefault)
+                parent.setPosition(device, [bottomPosition: 0, topPosition: 100])
+            else
+                parent.setPosition(device, [bottomPosition: 100, topPosition: 0])
             break
     }
 }
@@ -134,11 +153,14 @@ def open() {
 def close() {
     if (logEnable) log.debug "Executing 'close'"
     
-    //TODO get a mapping of the different shade types and add to switch statement
-    switch (state.shadeType) {
-        case 6:    // Duette, Applause
+    switch (state.shadeCapabilities) {
+        case 0:     // Standard
             parent.setPosition(device, [position: 0])
             break
+        case 6:     // Top-Down
+            parent.setPosition(device, [position: 100])
+            break
+        case 7:     // Top-Down/Bottom-Up
         default:
             parent.setPosition(device, [bottomPosition: 0, topPosition: 0])
             break
