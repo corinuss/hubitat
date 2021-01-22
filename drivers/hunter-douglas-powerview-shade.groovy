@@ -16,6 +16,10 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  *  Change Log:
+ *    01/22/2021 v1.2 - Can now change default open/close rail for TD/BU shades (corinuss)
+ *                    - SetPosition behaviors now use capabilities rather than shade types  (corinuss)
+ *                    - Position conversions from raw values to percentages are now rounded.  For example, SetPosition
+ *                      50% now returns position 50% rather than 49%  (corinuss)
  *    01/18/2021 v1.1 - Refresh requests now explicitly request a physical refresh when polling the shade (corinuss)
  *                    - Improved Battery status for Recharable Battery Wands (corinuss)
  *    05/10/2020 v1.0 - Initial release
@@ -104,21 +108,31 @@ public handleEvent(shadeJson) {
 }
 
 def updatePosition(position, posKind) {
-    def intPosition = (int)(position * 100 / 65535)
-    def eventName = (posKind == 1) ? "bottomPosition" : "topPosition"
+    def isBottom = (posKind == 1)
+    def isDefault = (isBottom != openTopByDefault)
+    def intPosition = Math.round(position * 100 / 65535)
+
+    def eventName = isBottom ? "bottomPosition" : "topPosition"
     if (logEnable) log.debug "sending event ${eventName} with value ${intPosition}"
-
     sendEvent(name: eventName, value: intPosition)
-    sendEvent(name: "level", value: intPosition)
+    
+    if (isDefault) {
+        if (logEnable) log.debug "sending event level with value ${intPosition}"
+        sendEvent(name: "level", value: intPosition)
 
-    if (intPosition >= 99) {
-        stateName = 'open'
-    } else if (intPosition > 0) {
-        stateName = 'partially open'
-    } else {
-        stateName = 'closed'
+        // TODO: Fix this for TDBU
+        // This currently only reports the status of the default shade, but either each shade
+        // should have its own value, or we should sum both values and use THAT to determine
+        // whether this shade is fully open or not.
+        if (intPosition >= 99) {
+            stateName = 'open'
+        } else if (intPosition > 0) {
+            stateName = 'partially open'
+        } else {
+            stateName = 'closed'
+        }
+        sendEvent(name: 'windowShade', value: stateName)
     }
-    sendEvent(name: 'windowShade', value: stateName)
 }
 
 // parse events into attributes
@@ -132,9 +146,9 @@ def open() {
     // 0     = Standard bottom-up?
     // Bit 0 = Bottom-Up rail exists
     // Bit 1 = Top-Down rail exist?
-    // Bit 2 = Not standard...?
+    // Bit 2 = Top-Down rail exist?
     switch (state.shadeCapabilities) {
-        case 0:     // Standard
+        case 0:     // Standard / Bottom-Up
             parent.setPosition(device, [position: 100])
             break
         case 6:     // Top-Down
